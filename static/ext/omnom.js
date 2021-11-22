@@ -182,12 +182,10 @@ async function getDOM() {
 async function createSnapshot() {
     const doc = await getDOM();
     let dom = document.createElement('html');
-    let domNew = doc.html.cloneNode(true);
     dom.innerHTML = doc.html;
     for (let k in doc.attributes) {
         dom.setAttribute(k, doc.attributes[k]);
     }
-    console.log({ dom, domNew });
     let nodesToAppend = [];
     let nodesToRemove = [];
     await walkDOM(dom, async function (node) {
@@ -252,10 +250,14 @@ async function createSnapshot() {
 
 async function walkDOM(node, func) {
     await func(node);
-    let children = node.childNodes;
-    for (let i = 0; i < children.length; i++) {
-        await walkDOM(children[i], func);
-    }
+    let children = Array.from(node.childNodes);
+    Promise.allSettled(children.map(async (node, index) => {
+        console.log('nodeIndex: ', index);
+        await walkDOM(node, func)
+    }));
+    // for (let i = 0; i < children.length; i++) {
+    //     await walkDOM(children[i], func);
+    // }
 }
 
 async function rewriteAttributes(node) {
@@ -296,7 +298,7 @@ async function inlineFile(url) {
     let request = new Request(url, options);
     downloadCount++;
     updateStatus();
-    let obj = await fetch(request, options).then(async function (response) {
+    let obj = fetch(request, options).then(async function (response) {
         let contentType = response.headers.get("Content-Type");
         if (contentType.toLowerCase().search("text") != -1) {
             // TODO use charset of the response
