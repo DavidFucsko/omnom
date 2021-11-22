@@ -10,6 +10,7 @@ let debug = false;
 let site_url = '';
 let omnom_token = '';
 let omnom_url = '';
+let tabId = '';
 
 function debugPopup(content) {
     if (is_chrome) {
@@ -52,48 +53,66 @@ function saveBookmark(e) {
 
 function displayPopup() {
     document.querySelector("form").addEventListener("submit", saveBookmark);
-    br.storage.local.get(['omnom_url', 'omnom_token', 'omnom_debug'], function (data) {
-        omnom_url = data.omnom_url || '';
-        omnom_token = data.omnom_token || '';
-        debug = data.omnom_debug || false;
-        document.getElementById("omnom_options").addEventListener("click", function () {
-            br.runtime.openOptionsPage(function () {
-                window.close();
-            });
+    document.getElementById("omnom_options").addEventListener("click", function () {
+        br.runtime.openOptionsPage(function () {
+            window.close();
         });
-        if (omnom_url == '') {
-            document.getElementById("omnom_content").innerHTML = '<h1>Server URL not found. Specify it in the extension\'s options</h1>';
-            return;
+    });
+    setOmnomSettings().then(fillFormFields, renderError);
+}
+
+function renderError(errorMessage) {
+    console.log(errorMessage);
+    document.getElementById("omnom_content").innerHTML = `<h1>${errorMessage}</h1>`;
+}
+
+function getOmnomDataFromLocal() {
+    return new Promise((resolve, reject) => {
+        br.storage.local.get(['omnom_url', 'omnom_token', 'omnom_debug'], (data) => {
+            data ? resolve(data) : reject('Could not get Data');
+        });
+    });
+}
+
+async function setOmnomSettings() {
+    const omnomData = await getOmnomDataFromLocal().catch(renderError);
+    omnom_url = omnomData.omnom_url || '';
+    omnom_token = omnomData.omnom_token || '';
+    debug = omnomData.omnom_debug || false;
+    if (omnom_token == '') {
+        return Promise.reject('Token not found. Specify it in the extension\'s options');
+    }
+    if (omnom_url == '') {
+        return Promise.reject('Server URL not found. Specify it in the extension\'s option');
+    }
+    return Promise.resolve();
+}
+
+function fillFormFields() {
+    document.getElementById("omnom_url").innerHTML = "Server URL: " + omnom_url;
+    document.querySelector("form").action = omnom_url + 'add_bookmark';
+    document.getElementById("token").value = omnom_token;
+    // fill url input field
+    br.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+        document.getElementById('url').value = tabs[0].url;
+        site_url = tabs[0].url;
+        tabId = tabs[0].tabId;
+    });
+    // fill title input field
+    br.tabs.executeScript({
+        code: 'document.title;'
+    }, (title) => {
+        if (title && title[0]) {
+            document.getElementById('title').value = title[0];
         }
-        if (omnom_token == '') {
-            document.getElementById("omnom_content").innerHTML = '<h1>Token not found. Specify it in the extension\'s options</h1>';
-            return;
+    });
+    // fill notes input field
+    br.tabs.executeScript({
+        code: "window.getSelection().toString();"
+    }, function (selection) {
+        if (selection && selection[0]) {
+            document.getElementById("notes").value = selection[0];
         }
-        document.getElementById("omnom_url").innerHTML = "Server URL: " + omnom_url;
-        document.querySelector("form").action = omnom_url + 'add_bookmark';
-        document.getElementById("token").value = omnom_token;
-        // fill url input field
-        let url;
-        br.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
-            document.getElementById('url').value = tabs[0].url;
-            site_url = tabs[0].url;
-        });
-        // fill title input field
-        br.tabs.executeScript({
-            code: 'document.title;'
-        }, (title) => {
-            if (title && title[0]) {
-                document.getElementById('title').value = title[0];
-            }
-        });
-        // fill notes input field
-        br.tabs.executeScript({
-            code: "window.getSelection().toString();"
-        }, function (selection) {
-            if (selection && selection[0]) {
-                document.getElementById("notes").value = selection[0];
-            }
-        });
     });
 }
 
@@ -169,23 +188,27 @@ function getDOMData() {
     return ret;
 }
 
-async function createSnapshot() {
-    let doc;
-    function getDOM() {
-        return new Promise((resolve, error) => {
-            br.tabs.executeScript({
-                code: '(' + getDOMData + ')()'
-            }, (data) => {
-                if (data && data[0]) {
-                    doc = data[0];
-                    resolve('');
-                } else {
-                    error('meh');
-                }
-            });
-        });
+//
+async function getDOM() {
+    const data = await br.tabs.executeScript({
+        code: `(${getDOMData})()`
+    });
+
+    if (data && data[0]) {
+        return Promise.resolve(data[0]);
+    } else {
+        return Promise.reject('meh')
     }
-    await getDOM();
+}
+
+function getDomNew() {
+    br.scripting.executeScript({
+        target: { tabId },
+        func: () => getDOMData()
+    }, ([data]) => data ? console.log('yay data: ', data) : console.log('meeh data: ', data));
+}
+async function createSnapshot() {
+    let doc = await getDOM();
     let dom = document.createElement('html');
     dom.innerHTML = doc.html;
     for (let k in doc.attributes) {
