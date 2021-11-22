@@ -251,7 +251,7 @@ async function createSnapshot() {
 async function walkDOM(node, func) {
     await func(node);
     let children = Array.from(node.childNodes);
-    Promise.allSettled(children.map(async (node, index) => {
+    return Promise.allSettled(children.map(async (node, index) => {
         console.log('nodeIndex: ', index);
         await walkDOM(node, func)
     }));
