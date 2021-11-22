@@ -29,7 +29,7 @@ function saveBookmark(e) {
             debugPopup(result);
             return;
         }
-        let form = new FormData(document.forms['add']);
+        const form = new FormData(document.forms['add']);
         form.append("snapshot", result);
         fetch(omnom_url + 'add_bookmark', {
             method: 'POST',
@@ -88,32 +88,32 @@ async function setOmnomSettings() {
     return Promise.resolve();
 }
 
-function fillFormFields() {
+async function fillFormFields() {
     document.getElementById("omnom_url").innerHTML = "Server URL: " + omnom_url;
     document.querySelector("form").action = omnom_url + 'add_bookmark';
     document.getElementById("token").value = omnom_token;
+
     // fill url input field
-    br.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
-        document.getElementById('url').value = tabs[0].url;
-        site_url = tabs[0].url;
-        tabId = tabs[0].tabId;
-    });
+    const tab = await queryTabsToPromise();
+    if (tab) {
+        document.getElementById('url').value = tab.url;
+        site_url = tab.url;
+        tabId = tab.tabId;
+    }
+
     // fill title input field
-    br.tabs.executeScript({
-        code: 'document.title;'
-    }, (title) => {
-        if (title && title[0]) {
-            document.getElementById('title').value = title[0];
-        }
-    });
+    const title = await executeScriptToPromise(() => document.title);
+    console.log(title);
+    if (title && title[0]) {
+        document.getElementById('title').value = title[0];
+    }
+
     // fill notes input field
-    br.tabs.executeScript({
-        code: "window.getSelection().toString();"
-    }, function (selection) {
-        if (selection && selection[0]) {
-            document.getElementById("notes").value = selection[0];
-        }
-    });
+    const selection = await executeScriptToPromise(() => window.getSelection().toString());
+    console.log(selection);
+    if (selection && selection[0]) {
+        document.getElementById("notes").value = selection[0];
+    }
 }
 
 function rewriteAttributes(node) {
@@ -136,27 +136,6 @@ function rewriteAttributes(node) {
 }
 
 function getDOMData() {
-    function fullURL(url) {
-        return new URL(url, window.location.origin).href
-    }
-    function getCSSText(obj) {
-        if (obj.cssText) {
-            return obj.cssText;
-        }
-        let text = '';
-        for (let i = 0; i < obj.length; i++) {
-            let key = obj.item(i);
-            text += key + ':' + obj[key] + ';';
-        }
-        return text;
-    }
-    function walkDOM(node, func) {
-        func(node);
-        let children = node.childNodes;
-        for (let i = 0; i < children.length; i++) {
-            walkDOM(children[i], func);
-        }
-    }
     let html = document.getElementsByTagName('html')[0];
     let ret = {
         'html': html.cloneNode(true),
@@ -164,36 +143,35 @@ function getDOMData() {
         'title': '',
         'doctype': '',
     };
-    for (let k in html.attributes) {
-        let a = html.attributes[k];
-        ret.attributes[a.nodeName] = a.nodeValue;
-    }
     if (document.doctype) {
         ret.doctype = new XMLSerializer().serializeToString(document.doctype);
     }
     if (document.getElementsByTagName('title').length > 0) {
         ret.title = document.getElementsByTagName('title')[0].innerText;
     }
-    let nodesToRemove = [];
-    walkDOM(html, async function (n) {
-        if (n.nodeName == 'SCRIPT') {
-            nodesToRemove.push(n);
-            return;
-        }
-    });
-    for (i in nodesToRemove) {
-        nodesToRemove[i].remove();
-    }
     ret.html = ret.html.outerHTML;
     return ret;
 }
 
-//
-async function getDOM() {
-    const data = await br.tabs.executeScript({
-        code: `(${getDOMData})()`
+function executeScriptToPromise(functionToExecute) {
+    return new Promise(resolve => {
+        br.tabs.executeScript({
+            code: `(${functionToExecute})()`
+        },
+            (data) => {
+                resolve(data);
+            });
     });
+}
 
+function queryTabsToPromise() {
+    return new Promise(resolve => {
+        br.tabs.query({ active: true, lastFocusedWindow: true }, ([tab]) => resolve(tab));
+    });
+}
+
+async function getDOM() {
+    const data = await executeScriptToPromise(getDOMData);
     if (data && data[0]) {
         return Promise.resolve(data[0]);
     } else {
@@ -201,19 +179,15 @@ async function getDOM() {
     }
 }
 
-function getDomNew() {
-    br.scripting.executeScript({
-        target: { tabId },
-        func: () => getDOMData()
-    }, ([data]) => data ? console.log('yay data: ', data) : console.log('meeh data: ', data));
-}
 async function createSnapshot() {
-    let doc = await getDOM();
+    const doc = await getDOM();
     let dom = document.createElement('html');
+    let domNew = doc.html.cloneNode(true);
     dom.innerHTML = doc.html;
     for (let k in doc.attributes) {
         dom.setAttribute(k, doc.attributes[k]);
     }
+    console.log({ dom, domNew });
     let nodesToAppend = [];
     let nodesToRemove = [];
     await walkDOM(dom, async function (node) {
