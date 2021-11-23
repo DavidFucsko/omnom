@@ -78,14 +78,12 @@ async function fillFormFields() {
 
     // fill title input field
     const title = await executeScriptToPromise(() => document.title);
-    console.log(title);
     if (title && title[0]) {
         document.getElementById('title').value = title[0];
     }
 
     // fill notes input field
     const selection = await executeScriptToPromise(() => window.getSelection().toString());
-    console.log(selection);
     if (selection && selection[0]) {
         document.getElementById("notes").value = selection[0];
     }
@@ -171,17 +169,17 @@ async function transformLink(node) {
         }
         let cssHref = node.attributes.href.nodeValue;
         let style = document.createElement('style');
-        let cssText = await inlineFile(cssHref);
-        style.innerHTML = await sanitizeCSS(cssText);
-        node.parentNode.appendChild(style);
-        node.remove();
-        return;
+        return inlineFile(cssHref).then(async (cssText) => {
+            style.innerHTML = await sanitizeCSS(cssText);
+            node.parentNode.appendChild(style);
+            node.remove();
+        });
     }
     if ((node.getAttribute("rel") || '').trim().toLowerCase() == "icon" || (node.getAttribute("rel") || '').trim().toLowerCase() == "shortcut icon") {
-        let favicon = await inlineFile(node.href);
-        document.getElementById('favicon').value = favicon;
-        node.href = favicon;
-        return;
+        return inlineFile(node.href).then(async (favicon) => {
+            document.getElementById('favicon').value = favicon;
+            node.href = favicon;
+        });
     }
 }
 
@@ -191,28 +189,10 @@ async function transformStyle(node) {
 }
 
 async function transfromImg(node) {
-    node.src = await inlineFile(node.getAttribute("src"));
-    return;
+    return inlineFile(node.getAttribute("src")).then(async (src) => {
+        node.src = src;
+    });
 }
-
-// function rewriteAttributes(node) {
-//     for (let i = 0; i < node.attributes.length; i++) {
-//         let attr = node.attributes[i];
-//         if (attr.nodeName === undefined) {
-//             continue;
-//         }
-//         if (attr.nodeName.startsWith("on")) {
-//             attr.nodeValue = '';
-//             //} else if(attr.nodeName.startsWith("data-")) {
-//             //    attr.nodeValue = '';
-//         } else if (attr.nodeValue.trim().toLowerCase().startsWith("javascript:")) {
-//             attr.nodeValue = '';
-//         }
-//         if (attr.nodeName == "href") {
-//             attr.nodeValue = fullURL(attr.nodeValue);
-//         }
-//     }
-// }
 
 function getDOMData() {
     let html = document.getElementsByTagName('html')[0];
@@ -349,7 +329,6 @@ async function walkDOM(node, func) {
     await func(node);
     let children = Array.from(node.childNodes);
     return Promise.allSettled(children.map(async (node, index) => {
-        console.log('nodeIndex: ', index);
         await walkDOM(node, func)
     }));
 }
@@ -358,41 +337,47 @@ async function sanitizeCSS(rules) {
     if (typeof rules === 'string' || rules instanceof String) {
         rules = parseCSS(rules);
     }
-    let sanitizedCSS = '';
-    for (let k in rules) {
-        let r = rules[k];
+    let cssMap = new Map();
+    const rulesArray = Array.from(rules);
+    await Promise.allSettled(rulesArray.map(async (r, index) => {
         // TODO handle other rule types
         // https://developer.mozilla.org/en-US/docs/Web/API/CSSRule/type
 
-        // CSSStyleRule
+        // CSSStyleRule        
         if (r.type == 1) {
-            sanitizedCSS += await sanitizeCSSRule(r);
+            const css = await sanitizeCSSRule(r);
+            cssMap.set(index, css);
             // CSSimportRule
         } else if (r.type == 3) {
             // TODO handle import loops
-            sanitizedCSS += await sanitizeCSS(r.href);
+            const sanitizedCSS = await sanitizeCSS(r.href);
+            cssMap.set(index, sanitizedCSS);
             // r.href = '' need this here ?;
             // CSSMediaRule
         } else if (r.type == 4) {
-            sanitizedCSS += "@media " + r.media.mediaText + '{';
+            let sanitizedCSS = "@media " + r.media.mediaText + '{';
             for (let k2 in r.cssRules) {
                 let r2 = r.cssRules[k2];
                 sanitizedCSS += await sanitizeCSSRule(r2);
             }
             sanitizedCSS += '}';
+            cssMap.set(index, sanitizedCSS);
             // CSSFontFaceRule
         } else if (r.type == 5) {
             let fontRule = await sanitizeCSSFontFace(r);
             if (fontRule) {
-                sanitizedCSS += fontRule;
+                cssMap.set(index, fontRule);
             } else {
-                sanitizedCSS += r.cssText;
+                cssMap.set(index, r.cssText);
             }
         } else {
             console.log("MEEEH, unknown css rule type: ", r);
+            return Promise.reject("MEEEH, unknown css rule type: ", r);
         }
-    }
-    return sanitizedCSS
+    }));
+    const sanitizedCSS = new Map([...cssMap.entries()].sort());
+    const result = [...sanitizedCSS.values()].join('');
+    return result;
 }
 
 async function sanitizeCSSRule(r) {
